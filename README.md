@@ -42,6 +42,39 @@ frontend/
 - Node.js 20.12+、Python 3.10+（本專案使用 3.12 venv）、PostgreSQL 14+
 - 選用：`uv`（建立 venv 與安裝套件 faster）、`ruff`（靜態檢查）
 
+## 每日開機：一鍵啟動
+
+**電腦重開後，資料都還在**（PostgreSQL 服務設為自動啟動，資料庫與 `backend\.env` 都在磁碟上），
+只有前後端兩個伺服器程序需要重啟。**直接雙擊專案根目錄的 `start-dev.bat`** 即可：
+
+```
+start-dev.bat     →  檢查 PostgreSQL → 啟動後端 → 啟動前端 → 等就緒 → 自動開啟瀏覽器
+stop-dev.bat      →  關閉後端與前端
+```
+
+腳本會把執行紀錄寫在 `logs/`（`backend.log`、`frontend.log`、錯誤檔），啟動失敗時看那裡最快。
+也可以用指令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-dev.ps1
+powershell -ExecutionPolicy Bypass -File .\stop-dev.ps1
+```
+
+手動啟動的話：
+
+```powershell
+# 終端機 1：後端
+cd backend
+.venv/Scripts/python.exe -m flask --app wsgi run --port 5000
+
+# 終端機 2：前端
+cd frontend
+npm run dev
+```
+
+> 前端 Vite 只綁在 `localhost`（IPv6），請用 **http://localhost:5173** 開啟，不要用 `127.0.0.1:5173`。
+> 需要用 IP 讓同網段其他裝置連入時，改用 `npm run dev -- --host`。
+
 ## 首次設定
 
 ### 1. 後端

@@ -23,6 +23,7 @@ npm-debug.log*
 .env.local
 backend/db_password.txt
 backend/db_password.txt.bak
+logs/
 *.log
 .DS_Store
 Thumbs.db
