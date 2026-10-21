@@ -42,44 +42,61 @@ frontend/
 - Node.js 20.12+、Python 3.10+（本專案使用 3.12 venv）、PostgreSQL 14+
 - 選用：`uv`（建立 venv 與安裝套件 faster）、`ruff`（靜態檢查）
 
-## 每日開機：一鍵啟動
+## 每日開機：怎麼開起來
 
 **電腦重開後，資料都還在**（PostgreSQL 服務設為自動啟動，資料庫與 `backend\.env` 都在磁碟上），
-只有伺服器程序需要重啟。專案根目錄有三種啟動方式：
+只有伺服器程序需要重啟。手動操作如下。
 
-| 方式 | 指令 | 開啟網址 | 用途 |
-| --- | --- | --- | --- |
-| **開發模式**（前後端分離） | 雙擊 `start-dev.bat` | http://localhost:5173 | 改前端會熱更新，日常開發用 |
-| **單一服務模式** | 雙擊 `start-backend.bat` | http://127.0.0.1:5000 | 只啟後端；Flask 同時託管打包好的前端與 API，展示／交作業用 |
-| **純 API** | `powershell -ExecutionPolicy Bypass -File .\start-backend.ps1 -ApiOnly` | http://127.0.0.1:5000/api/health | 只跑 API（給其他工具呼叫、或除錯用） |
+### 方式 A：只啟動後端（單一服務，網頁＋API 同一個埠）
 
-停止：`stop-dev.bat`（開發模式）或 `stop-backend.bat`（單一服務模式）。
-
-單一服務模式會自動執行 `npm run build` 打包前端；若 `frontend\dist` 已是最新，可用
-`powershell -ExecutionPolicy Bypass -File .\start-backend.ps1 -NoBuild` 略過打包。
-
-執行紀錄寫在 `logs/`（`backend.log`、`frontend.log`、錯誤檔），啟動失敗時看那裡最快。
-也可以用指令：
+**第一次或前端改完之後**，先打包前端（之後可省略）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\start-dev.ps1
-powershell -ExecutionPolicy Bypass -File .\stop-dev.ps1
+cd frontend
+npm install          # 只有第一次需要
+npm run build        # 產生 frontend\dist
 ```
 
-手動啟動的話：
+啟動後端：
 
 ```powershell
-# 終端機 1：後端
 cd backend
-.venv/Scripts/python.exe -m flask --app wsgi run --port 5000
+.venv\Scripts\python.exe -m flask --app wsgi run --port 5000
+```
 
-# 終端機 2：前端
+開瀏覽器到 **http://127.0.0.1:5000** —— 網頁與 API 都在這個位址。
+
+> 前端改動後要重新 `npm run build` 才會反映到這個模式。
+
+### 方式 B：開發模式（前後端分離，改前端會熱更新）
+
+開兩個終端機：
+
+```powershell
+# 終端機 1：後端 API
+cd backend
+.venv\Scripts\python.exe -m flask --app wsgi run --port 5000
+```
+
+```powershell
+# 終端機 2：前端（Vite）
 cd frontend
 npm run dev
 ```
 
-> 前端 Vite 只綁在 `localhost`（IPv6），開發模式請用 **http://localhost:5173** 開啟，不要用 `127.0.0.1:5173`。
-> 需要用 IP 讓同網段其他裝置連入時，改用 `npm run dev -- --host`。
+開瀏覽器到 **http://localhost:5173**（Vite 只綁 `localhost`，不要用 `127.0.0.1:5173`）。
+需要讓同網段其他裝置連入時用 `npm run dev -- --host`。
+
+### 停止
+
+在啟動伺服器的終端機按 `Ctrl+C`。若是背景程序，用：
+
+```powershell
+Get-NetTCPConnection -LocalPort 5000 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+Get-NetTCPConnection -LocalPort 5173 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+```
+
+執行紀錄（若改用背景執行）在 `logs/`。
 
 ## 首次設定
 
