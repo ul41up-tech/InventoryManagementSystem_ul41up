@@ -90,22 +90,27 @@ def register_seed_command(app):
     @app.cli.command("seed")
     @click.option(
         "--password",
-        prompt=True,
-        hide_input=True,
-        confirmation_prompt=False,
         default=None,
-        help="種子帳號初始密碼；留空則取環境變數 SEED_PASSWORD。",
+        help="種子帳號初始密碼；預設取環境變數 SEED_PASSWORD。",
+    )
+    @click.option(
+        "--force-password",
+        is_flag=True,
+        help="強制把所有種子帳號的密碼重設為初始密碼（用於還原示範環境）。",
     )
     @with_appcontext
-    def seed(password: str | None):
+    def seed(password: str | None, force_password: bool):
         """建立或更新種子資料（冪等）。"""
         pwd = password or app.config.get("SEED_PASSWORD") or ""
+        if not pwd:
+            # 環境變數未提供時才互動詢問（避免自動流程被提示卡住）
+            pwd = click.prompt("種子帳號初始密碼", hide_input=True)
         if not pwd:
             raise click.ClickException(
                 "未提供密碼：請設定環境變數 SEED_PASSWORD，或在提示時輸入。"
                 "（不接受預設值，避免所有種子帳號共用公開密碼）"
             )
-        summary = _seed(pwd)
+        summary = _seed(pwd, force_password=force_password)
         click.echo("種子資料完成：")
         for line in summary:
             click.echo(f"  - {line}")
@@ -115,7 +120,7 @@ def register_seed_command(app):
     return app
 
 
-def _seed(password: str) -> list[str]:
+def _seed(password: str, force_password: bool = False) -> list[str]:
     summary: list[str] = []
 
     # --- 使用者（不覆蓋既有帳號的角色與姓名）---
@@ -131,6 +136,13 @@ def _seed(password: str) -> list[str]:
             )
             db.session.add(user)
             summary.append(f"建立帳號 {username}（{role}）")
+        elif force_password:
+            # 還原示範環境：強制重設初始密碼
+            user.password_hash = hash_password(password)
+            user.must_change_password = True
+            user.failed_attempts = 0
+            user.locked_until = None
+            summary.append(f"強制重設帳號 {username} 的密碼")
         elif user.must_change_password:
             # 尚未自行改過密碼 → 套用本次的初始密碼
             user.password_hash = hash_password(password)

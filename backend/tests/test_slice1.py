@@ -468,3 +468,64 @@ def test_initial_migration_covers_all_tables():
     created = set(re.findall(r"CREATE TABLE (\w+)", content))
     expected = set(_db.metadata.tables.keys())
     assert expected <= created, f"migration 缺少資料表：{sorted(expected - created)}"
+
+# --- FR-26 帳號與角色管理（僅管理員）---
+def test_admin_can_create_and_deactivate_user(client, seeded):
+    login(client, "admin")
+    created = client.post(
+        "/api/users",
+        json={"username": "newhire", "name": "新進人員", "role": "warehouse", "password": "NewHire@2026"},
+    )
+    assert created.status_code == 201
+    user_id = created.get_json()["id"]
+
+    listed = client.get("/api/users").get_json()["data"]
+    assert any(u["username"] == "newhire" for u in listed)
+
+    disabled = client.patch(f"/api/users/{user_id}", json={"is_active": False})
+    assert disabled.status_code == 200
+
+    # 停用後不得登入
+    other = client.application.test_client()
+    res = other.post("/api/auth/login", json={"username": "newhire", "password": "NewHire@2026"})
+    assert res.status_code == 403
+
+
+def test_duplicate_username_returns_409(client, seeded):
+    login(client, "admin")
+    res = client.post(
+        "/api/users",
+        json={"username": "admin", "name": "重複", "role": "sales", "password": "NewHire@2026"},
+    )
+    assert res.status_code == 409
+
+
+def test_non_admin_cannot_manage_users(client, seeded):
+    login(client, "warehouse")
+    assert client.get("/api/users").status_code == 403
+    assert client.post("/api/users", json={"username": "x", "name": "y", "role": "sales", "password": "Passw0rd!"}).status_code == 403
+
+
+def test_admin_cannot_deactivate_self(client, seeded):
+    login(client, "admin")
+    me = client.get("/api/auth/me").get_json()
+    res = client.patch(f"/api/users/{me['id']}", json={"is_active": False})
+    assert res.status_code == 409
+
+
+def test_invalid_role_rejected(client, seeded):
+    login(client, "admin")
+    res = client.post(
+        "/api/users", json={"username": "badrole", "name": "錯誤角色", "role": "hacker", "password": "Passw0rd!"}
+    )
+    assert res.status_code == 400
+
+
+def test_admin_can_unlock_user(client, seeded, app):
+    login(client, "admin")
+    for _ in range(5):
+        client.post("/api/auth/login", json={"username": "warehouse", "password": "bad"})
+    user_id = client.get("/api/users").get_json()["data"]
+    target = [u for u in user_id if u["username"] == "warehouse"][0]
+    assert target["locked"] is True
+    assert client.post(f"/api/users/{target['id']}/unlock").status_code == 200
