@@ -13,11 +13,13 @@ const ROLE_LABEL = {
 const NAV_BY_ROLE = {
   admin: [
     { to: '/stock', label: '庫存查詢' },
+    { to: '/receiving', label: '入庫' },
     { to: '/master', label: '主檔瀏覽' },
     { to: '/audit', label: '操作紀錄' },
   ],
   warehouse: [
     { to: '/stock', label: '庫存查詢' },
+    { to: '/receiving', label: '入庫' },
   ],
   purchasing: [
     { to: '/stock', label: '庫存查詢' },

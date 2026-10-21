@@ -31,12 +31,13 @@ from .helpers import decimal_field, error, int_arg, text_field
 masterdata_bp = Blueprint("masterdata", __name__, url_prefix="/api")
 
 # 資源 → 可讀取的角色（PRD §4.1 權限矩陣：✖ = 不可見，👁 = 唯讀）
+# 倉庫與位置：全部角色可「檢視」（入庫與查詢都需要選位置），但僅管理員可「維護」。
 READABLE_BY = {
     "items": (ROLE_ADMIN, ROLE_WAREHOUSE, ROLE_PURCHASING, ROLE_SALES, ROLE_ACCOUNTING),
     "suppliers": (ROLE_ADMIN, ROLE_PURCHASING, ROLE_SALES, ROLE_ACCOUNTING),
     "customers": (ROLE_ADMIN, ROLE_PURCHASING, ROLE_SALES, ROLE_ACCOUNTING),
-    "warehouses": (ROLE_ADMIN, ROLE_ACCOUNTING),
-    "locations": (ROLE_ADMIN, ROLE_ACCOUNTING),
+    "warehouses": (ROLE_ADMIN, ROLE_WAREHOUSE, ROLE_PURCHASING, ROLE_SALES, ROLE_ACCOUNTING),
+    "locations": (ROLE_ADMIN, ROLE_WAREHOUSE, ROLE_PURCHASING, ROLE_SALES, ROLE_ACCOUNTING),
 }
 
 MONEY_MAX = Decimal("99999999.99")
@@ -219,3 +220,67 @@ def _next_item_code() -> str:
     codes = db.session.scalars(select(Item.code).where(Item.code.like("IT-%"))).all()
     numbers = [int(c[3:]) for c in codes if c[3:].isdigit()]
     return f"IT-{(max(numbers) if numbers else 0) + 1:06d}"
+
+
+@masterdata_bp.post("/warehouses")
+@require_roles(ROLE_ADMIN)
+def create_warehouse():
+    """建立倉庫（PRD FR-8）。"""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return error("請求內容必須是 JSON 物件")
+    code, err = text_field(payload, "code", required=True, max_length=20)
+    if err:
+        return error(err)
+    name, err = text_field(payload, "name", required=True, max_length=100)
+    if err:
+        return error(err)
+    if db.session.query(Warehouse).filter_by(code=code).first() is not None:
+        return error("倉庫代碼已存在", 409)
+
+    warehouse = Warehouse(code=code, name=name)
+    db.session.add(warehouse)
+    db.session.flush()
+    write_audit("WAREHOUSE_CREATED", doc_type="warehouse", doc_id=warehouse.code, detail=warehouse.name)
+    db.session.commit()
+    return jsonify({"id": warehouse.id, "code": warehouse.code, "name": warehouse.name}), 201
+
+
+@masterdata_bp.post("/locations")
+@require_roles(ROLE_ADMIN)
+def create_location():
+    """建立庫存位置（PRD FR-8）。"""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return error("請求內容必須是 JSON 物件")
+    code, err = text_field(payload, "code", required=True, max_length=30)
+    if err:
+        return error(err)
+    name, err = text_field(payload, "name", required=True, max_length=100)
+    if err:
+        return error(err)
+    warehouse_id = payload.get("warehouse_id")
+    warehouse = db.session.get(Warehouse, warehouse_id) if warehouse_id else None
+    if warehouse is None:
+        return error("請指定有效的倉庫")
+
+    exists = (
+        db.session.query(Location)
+        .filter_by(code=code, warehouse_id=warehouse.id)
+        .first()
+    )
+    if exists is not None:
+        return error("該倉庫內已有相同代碼的位置", 409)
+
+    location = Location(code=code, name=name, warehouse_id=warehouse.id)
+    db.session.add(location)
+    db.session.flush()
+    write_audit(
+        "LOCATION_CREATED",
+        doc_type="location",
+        doc_id=f"{warehouse.code}/{location.code}",
+        location_id=location.id,
+        detail=location.name,
+    )
+    db.session.commit()
+    return jsonify({"id": location.id, "code": location.code, "name": location.name}), 201

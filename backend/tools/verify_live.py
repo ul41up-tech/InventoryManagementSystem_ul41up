@@ -97,6 +97,7 @@ def wait_for_server(proc, timeout: int = 40) -> bool:
 
 
 def main() -> None:
+    skip_mutating = "--skip-mutating" in sys.argv
     env = read_env()
     seed_password = env.get("SEED_PASSWORD", "")
     if not seed_password:
@@ -151,7 +152,7 @@ def main() -> None:
             },
         )
         if status == 409:
-            users = admin.get("/api/users").get_json()["data"]
+            users = admin.get("/api/users")[1]["data"]
             probe = [u for u in users if u["username"] == PROBE_USER][0]
             status, _ = admin.patch(
                 f"/api/users/{probe['id']}", {"password": PROBE_PASSWORD, "is_active": True}
@@ -182,10 +183,15 @@ def main() -> None:
         check("查詢成功", status, 200)
         if status == 200 and body["data"]:
             row = body["data"][0]
-            check("在手量（120+30+185+15在途）", row["on_hand"], 350.0)
-            check("在途量", row["in_transit"], 15.0)
-            check("實體倉合計", row["real_on_hand"], 335.0)
-            check("可用量（無配置）", row["available"], 350.0)
+            # 以恆等式驗證（每次驗證都會真的入庫，絕對值會累積）
+            loc_sum = sum(loc["on_hand"] for loc in row["locations"])
+            transit_sum = sum(loc["on_hand"] for loc in row["locations"] if loc["is_virtual"])
+            alloc_sum = sum(loc["allocated"] for loc in row["locations"])
+            check("在手量 = 各位置合計", row["on_hand"], loc_sum)
+            check("在途量 = 在途位置合計", row["in_transit"], transit_sum)
+            check("實體倉合計 = 在手量 − 在途量", row["real_on_hand"], row["on_hand"] - row["in_transit"])
+            check("可用量 = 在手量 − 已配置", row["available"], row["on_hand"] - alloc_sum)
+            check("可用量不為負", row["available"] >= 0, True)
             check("ledger 與快取無差額", row["balance_diff"], 0.0)
             check("回應含位置明細", len(row["locations"]) > 0, True)
         else:
@@ -194,7 +200,7 @@ def main() -> None:
         print("=== 7. 權限矩陣（PRD §4.1）===")
         check("倉管讀供應商 → 403", client.get("/api/suppliers")[0], 403)
         check("倉管讀客戶 → 403", client.get("/api/customers")[0], 403)
-        check("倉管讀倉庫 → 403", client.get("/api/warehouses")[0], 403)
+        check("倉管讀倉庫（檢視，v3.1 修訂後）→ 200", client.get("/api/warehouses")[0], 200)
         check("倉管讀稽核紀錄 → 403", client.get("/api/audit-logs")[0], 403)
         check("倉管讀庫存 → 200", client.get("/api/stock/query")[0], 200)
         check("倉管讀帳號管理 → 403", client.get("/api/users")[0], 403)
@@ -241,6 +247,107 @@ def main() -> None:
         ]:
             check(f"稽核含 {action}", action in actions, True)
 
+        print("=== 10. 入庫流程（切片 2）===")
+        if skip_mutating:
+            print("  [SKIP] 已指定 --skip-mutating，略過會改變資料的入庫驗證")
+            print()
+            if failures:
+                print(f"=== 驗證結果：{len(failures)} 項未通過 ===")
+                for item in failures:
+                    print(f"  - {item}")
+                raise SystemExit(1)
+            print("=== 驗證結果：全部通過（未執行入庫驗證）===")
+            return
+        locations = client.get("/api/locations")[1]["data"]
+        a01 = next((loc for loc in locations if loc["code"] == "A-01"), None)
+        check("可取得庫存位置 A-01", a01 is not None, True)
+
+        po_client = Client()
+        po_client.post("/api/auth/login", {"username": "purchasing", "password": seed_password})
+        po_res = po_client.post(
+            "/api/purchase-orders",
+            {
+                "supplier_id": 1,
+                "lines": [{"item_id": 1, "quantity": 100, "unit_price": 45}],
+            },
+        )
+        check("建立草頭採購單", po_res[0], 201)
+        po_data = po_client.get("/api/purchase-orders")[1]["data"][0]
+        po_line = po_data["lines"][0]
+        check("採購單待入庫數量", po_line["pending_quantity"], 100.0)
+
+        before = client.get("/api/stock/query?q=IT-000001")[1]["data"][0]["on_hand"]
+        grn_res = client.post(
+            "/api/grn",
+            {
+                "purchase_order_id": po_data["id"],
+                "lines": [
+                    {
+                        "item_id": po_line["item_id"],
+                        "purchase_order_line_id": po_line["id"],
+                        "quantity": 95,
+                        "unit_cost": 46,
+                        "location_id": a01["id"],
+                    }
+                ],
+            },
+        )
+        check("入庫成功", grn_res[0], 201)
+        if grn_res[0] == 201:
+            body = grn_res[1]
+            check("入庫單編號格式", body["code"].startswith("GR-"), True)
+            check("建立批次", body["batch_codes"][0].startswith("B"), True)
+
+            after = client.get("/api/stock/query?q=IT-000001")[1]["data"][0]
+            check("在手量增加 95", after["on_hand"], before + 95)
+            check("ledger 與快取零差額", after["balance_diff"], 0.0)
+
+            po_after = client.get("/api/purchase-orders")[1]["data"][0]["lines"][0]
+            check("已入庫數量", po_after["received_quantity"], 95.0)
+            check("待入庫數量剩 5", po_after["pending_quantity"], 5.0)
+
+        over = client.post(
+            "/api/grn",
+            {
+                "purchase_order_id": po_data["id"],
+                "lines": [
+                    {
+                        "item_id": po_line["item_id"],
+                        "purchase_order_line_id": po_line["id"],
+                        "quantity": 6,
+                        "unit_cost": 46,
+                        "location_id": a01["id"],
+                    }
+                ],
+            },
+        )
+        check("超過待入庫數量被拒", over[0], 400)
+
+        sales_client = Client()
+        sales_client.post("/api/auth/login", {"username": "sales", "password": seed_password})
+        check(
+            "銷售角色不得入庫",
+            sales_client.post(
+                "/api/grn",
+                {
+                    "manual": True,
+                    "reason": "測試",
+                    "lines": [
+                        {
+                            "item_id": 1,
+                            "quantity": 1,
+                            "unit_cost": 45,
+                            "location_id": a01["id"],
+                        }
+                    ],
+                },
+            )[0],
+            403,
+        )
+
+        status, body = admin.get("/api/audit-logs?limit=500")
+        check("稽核含 GRN_POSTED", "GRN_POSTED" in {r["action"] for r in body["data"]}, True)
+
         print()
         if failures:
             print(f"=== 驗證結果：{len(failures)} 項未通過 ===")
@@ -248,7 +355,6 @@ def main() -> None:
                 print(f"  - {item}")
             raise SystemExit(1)
         print("=== 驗證結果：全部通過 ===")
-
     finally:
         proc.terminate()
         try:

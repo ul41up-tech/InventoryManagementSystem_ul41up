@@ -33,6 +33,8 @@ def create_app(config_object: type[Config] = Config) -> Flask:
 
     from .api.audit import audit_bp
     from .api.masterdata import masterdata_bp
+    from .api.purchase import purchase_bp
+    from .api.receiving import receiving_bp
     from .api.stock import stock_bp
     from .api.users import users_bp
     from .auth import auth_bp
@@ -42,6 +44,8 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     app.register_blueprint(stock_bp)
     app.register_blueprint(audit_bp)
     app.register_blueprint(users_bp)
+    app.register_blueprint(purchase_bp)
+    app.register_blueprint(receiving_bp)
 
     from .seed import register_seed_command
 

@@ -78,4 +78,14 @@ export const api = {
     return request(`/api/audit-logs${query ? `?${query}` : ''}`)
   },
   createItem: (payload) => request('/api/items', { method: 'POST', body: payload }),
+
+  // 切片 2：入庫
+  purchaseOrders: () => request('/api/purchase-orders'),
+  createPurchaseOrder: (payload) =>
+    request('/api/purchase-orders', { method: 'POST', body: payload }),
+  grn: (limit = 50) => request(`/api/grn?limit=${limit}`),
+  createGrn: (payload) => request('/api/grn', { method: 'POST', body: payload }),
+  locationItems: (locationId) => request(`/api/grn/locations/${locationId}/items`),
+  createWarehouse: (payload) => request('/api/warehouses', { method: 'POST', body: payload }),
+  createLocation: (payload) => request('/api/locations', { method: 'POST', body: payload }),
 }

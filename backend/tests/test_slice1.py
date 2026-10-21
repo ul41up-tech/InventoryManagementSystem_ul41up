@@ -410,8 +410,9 @@ MATRIX_READ = {
     "/api/items": {"admin": 200, "warehouse": 200, "purchasing": 200, "sales": 200, "accounting": 200},
     "/api/suppliers": {"admin": 200, "warehouse": 403, "purchasing": 200, "sales": 200, "accounting": 200},
     "/api/customers": {"admin": 200, "warehouse": 403, "purchasing": 200, "sales": 200, "accounting": 200},
-    "/api/warehouses": {"admin": 200, "warehouse": 403, "purchasing": 403, "sales": 403, "accounting": 200},
-    "/api/locations": {"admin": 200, "warehouse": 403, "purchasing": 403, "sales": 403, "accounting": 200},
+    # 倉庫／位置：全部角色可檢視（入庫需選位置），但僅管理員可維護（見 slice 2 修訂）
+    "/api/warehouses": {"admin": 200, "warehouse": 200, "purchasing": 200, "sales": 200, "accounting": 200},
+    "/api/locations": {"admin": 200, "warehouse": 200, "purchasing": 200, "sales": 200, "accounting": 200},
 }
 
 

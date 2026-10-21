@@ -198,6 +198,10 @@ class GrnLine(db.Model):
     location_id: Mapped[int] = mapped_column(ForeignKey("locations.id"), nullable=False)
     quantity: Mapped[Numeric] = mapped_column(Numeric(14, 3), nullable=False)
     actual_unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False)
+    purchase_order_line_id: Mapped[int | None] = mapped_column(
+        ForeignKey("purchase_order_lines.id"), nullable=True
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Batch(TimestampMixin, db.Model):
