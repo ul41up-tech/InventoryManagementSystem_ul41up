@@ -2,7 +2,7 @@
 title: MVP 切片 1：登入、權限與庫存查詢
 spec_id: mvp-slice-1
 route: dispatch
-status: in-review
+status: done
 created: 2026-10-21
 updated: 2026-10-21
 date: 2026-10-21

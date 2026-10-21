@@ -1,6 +1,6 @@
 ---
 title: 庫存管理系統
-status: draft
+status: final
 created: 2026-10-21
 updated: 2026-10-21
 ---
