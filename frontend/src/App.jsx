@@ -8,6 +8,7 @@ import Login from './pages/Login.jsx'
 import MasterData from './pages/MasterData.jsx'
 import Receiving from './pages/Receiving.jsx'
 import StockQuery from './pages/StockQuery.jsx'
+import Transfers from './pages/Transfers.jsx'
 import { api } from './api.js'
 
 const AuthContext = createContext(null)
@@ -77,6 +78,7 @@ export default function App() {
           >
             <Route path="stock" element={<StockQuery />} />
             <Route path="receiving" element={<Receiving />} />
+            <Route path="transfers" element={<Transfers />} />
             <Route path="master" element={<MasterData />} />
             <Route path="audit" element={<AuditLogs />} />
             <Route path="change-password" element={<ChangePassword />} />

@@ -141,7 +141,8 @@ def test_stock_numbers_match_seed_data(client, seeded):
     assert row["on_hand"] == 350.0
     assert row["in_transit"] == 15.0
     assert row["real_on_hand"] == 335.0
-    assert row["available"] == 350.0  # 尚無配置量
+    # 在途不計入可用量（PRD §3）
+    assert row["available"] == 335.0  # 尚無配置量
     assert row["balance_diff"] == 0.0  # ledger 與快取一致
 
 
@@ -174,7 +175,7 @@ def test_available_equals_on_hand_minus_allocations(client, seeded, app):
     login(client, "warehouse")
     row = client.get("/api/stock/query?q=IT-000001").get_json()["data"][0]
     assert row["on_hand"] == 350.0
-    assert row["available"] == 330.0
+    assert row["available"] == 315.0  # 實體倉 335 − 配置 20
 
 
 def test_unmatched_allocation_still_reduces_available(client, seeded, app):
@@ -200,7 +201,7 @@ def test_unmatched_allocation_still_reduces_available(client, seeded, app):
     login(client, "warehouse")
     row = client.get("/api/stock/query?q=IT-000005").get_json()["data"][0]
     assert row["on_hand"] == 500.0
-    assert row["available"] == 495.0
+    assert row["available"] == 495.0  # 無在途，500 − 5
 
 
 def test_location_breakdown_matches_allocation(client, seeded, app):
@@ -244,7 +245,7 @@ def test_location_breakdown_matches_allocation(client, seeded, app):
     assert transit["allocated"] == 0.0
     assert transit["on_hand"] == 15.0
 
-    assert row["available"] == 350.0 - 30.0
+    assert row["available"] == 335.0 - 30.0  # 實體倉合計 − 配置（在途不計入）
 
 
 def test_stock_numbers_come_from_ledger_not_cache(client, seeded, app):

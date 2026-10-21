@@ -88,4 +88,13 @@ export const api = {
   locationItems: (locationId) => request(`/api/grn/locations/${locationId}/items`),
   createWarehouse: (payload) => request('/api/warehouses', { method: 'POST', body: payload }),
   createLocation: (payload) => request('/api/locations', { method: 'POST', body: payload }),
+
+  // 切片 3：移轉與調貨
+  transferOrders: () => request('/api/transfers/transfer-orders'),
+  createTransferOrder: (payload) =>
+    request('/api/transfers/transfer-orders', { method: 'POST', body: payload }),
+  shipTransfer: (id) => request(`/api/transfers/transfer-orders/${id}/ship`, { method: 'POST' }),
+  receiveTransfer: (id, payload) =>
+    request(`/api/transfers/transfer-orders/${id}/receive`, { method: 'POST', body: payload }),
+  moveStock: (payload) => request('/api/transfers/move', { method: 'POST', body: payload }),
 }

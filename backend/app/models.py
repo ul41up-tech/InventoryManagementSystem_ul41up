@@ -303,6 +303,7 @@ class TransferOrderLine(db.Model):
     batch_id: Mapped[int] = mapped_column(ForeignKey("batches.id"), nullable=False)
     from_location_id: Mapped[int] = mapped_column(ForeignKey("locations.id"), nullable=False)
     quantity: Mapped[Numeric] = mapped_column(Numeric(14, 3), nullable=False)
+    received_quantity: Mapped[Numeric | None] = mapped_column(Numeric(14, 3), nullable=True)
 
 
 class ReturnOrder(TimestampMixin, db.Model):

@@ -174,8 +174,12 @@ def query_stock():
     data = []
     for bucket in per_item.values():
         item = bucket["item"]
-        # 可用量 = 在手量 − 該商品所有有效配置量（沒有對應餘額的配置也要扣）
-        available = max(Decimal("0"), bucket["on_hand"] - bucket["alloc_total"])
+        on_hand = bucket["on_hand"]
+        in_transit = bucket["in_transit"]
+        # 實體倉合計：在手量扣除在途（在途位於虛擬位置，不屬於任何實體倉）
+        real_on_hand = on_hand - in_transit
+        # 可用量 = 實體倉合計 − 有效配置量（PRD §3：在途不計入可用量）
+        available = max(Decimal("0"), real_on_hand - bucket["alloc_total"])
         data.append(
             {
                 "id": item.id,
@@ -183,11 +187,11 @@ def query_stock():
                 "name": item.name,
                 "unit": item.unit,
                 "suggested_price": _f(item.suggested_price),
-                "on_hand": _f(bucket["on_hand"]),
+                "on_hand": _f(on_hand),
                 "available": _f(available),
                 "allocated": _f(bucket["alloc_total"]),
-                "in_transit": _f(bucket["in_transit"]),
-                "real_on_hand": _f(bucket["on_hand"] - bucket["in_transit"]),
+                "in_transit": _f(in_transit),
+                "real_on_hand": _f(real_on_hand),
                 "balance_diff": _f(bucket["balance_diff"]),
                 "locations": sorted(
                     bucket["locations"],
@@ -230,11 +234,14 @@ def item_batches(item_id: int):
             "item": {"id": item.id, "code": item.code, "name": item.name},
             "data": [
                 {
+                    "batch_id": batch.id,
+                    "location_id": loc.id,
                     "batch_code": batch.code,
                     "in_date": batch.in_date.isoformat() if batch.in_date else None,
                     "expiry_date": batch.expiry_date.isoformat() if batch.expiry_date else None,
                     "actual_unit_cost": _f(batch.actual_unit_cost),
                     "warehouse_code": wh.code,
+                    "warehouse_id": wh.id,
                     "location_code": loc.code,
                     "is_virtual": wh.is_virtual,
                     "on_hand": _f(ledger.qty),

@@ -190,7 +190,7 @@ def main() -> None:
             check("在手量 = 各位置合計", row["on_hand"], loc_sum)
             check("在途量 = 在途位置合計", row["in_transit"], transit_sum)
             check("實體倉合計 = 在手量 − 在途量", row["real_on_hand"], row["on_hand"] - row["in_transit"])
-            check("可用量 = 在手量 − 已配置", row["available"], row["on_hand"] - alloc_sum)
+            check("可用量 = 實體倉合計 − 已配置（在途不計入）", row["available"], row["on_hand"] - transit_sum - alloc_sum)
             check("可用量不為負", row["available"] >= 0, True)
             check("ledger 與快取無差額", row["balance_diff"], 0.0)
             check("回應含位置明細", len(row["locations"]) > 0, True)
@@ -347,6 +347,93 @@ def main() -> None:
 
         status, body = admin.get("/api/audit-logs?limit=500")
         check("稽核含 GRN_POSTED", "GRN_POSTED" in {r["action"] for r in body["data"]}, True)
+
+        print("=== 11. 移轉與調貨（切片 3）===")
+        if skip_mutating:
+            print("  [SKIP] 已指定 --skip-mutating，略過會改變資料的調貨驗證")
+        else:
+            stock_rows = client.get("/api/stock/query?q=IT-000001")[1]["data"][0]
+            kh_row = next(
+                (
+                    loc
+                    for loc in stock_rows["locations"]
+                    if loc["warehouse_code"] == "WH-KH" and loc["on_hand"] > 0
+                ),
+                None,
+            )
+            check("中港倉有 IT-000001 庫存可調", kh_row is not None, True)
+            if kh_row is not None:
+                batches = client.get("/api/stock/items/1/batches")[1]["data"]
+                batch = next(
+                    (
+                        b
+                        for b in batches
+                        if b["batch_code"] == kh_row["batch_code"]
+                        and b["location_code"] == kh_row["location_code"]
+                    ),
+                    None,
+                )
+                check("可查到該批次所在庫位", batch is not None, True)
+
+                wh = client.get("/api/warehouses")[1]["data"]
+                nh_id = next(w["id"] for w in wh if w["code"] == "WH-NH")
+                kh_id = next(w["id"] for w in wh if w["code"] == "WH-KH")
+                nh_loc = next(
+                    loc["id"]
+                    for loc in client.get("/api/locations")[1]["data"]
+                    if loc["code"] == "A-01" and loc["warehouse_code"] == "WH-NH"
+                )
+
+                before_transit = stock_rows["in_transit"]
+                before_kh = kh_row["on_hand"]
+
+                created = client.post(
+                    "/api/transfers/transfer-orders",
+                    {
+                        "from_warehouse_id": kh_id,
+                        "to_warehouse_id": nh_id,
+                        "demand_source": "驗證用調貨",
+                        "lines": [
+                            {
+                                "batch_id": batch["batch_id"],
+                                "from_location_id": batch["location_id"],
+                                "quantity": 20,
+                            }
+                        ],
+                    },
+                )
+                check("建立調貨單", created[0], 201)
+                order_id = created[1]["id"]
+                check("調貨單編號格式", created[1]["code"].startswith("TO-"), True)
+
+                shipped = client.post(f"/api/transfers/transfer-orders/{order_id}/ship")
+                check("調貨出庫", shipped[0], 200)
+                check("狀態為在途", shipped[1]["status"], "in_transit")
+
+                after_ship = client.get("/api/stock/query?q=IT-000001")[1]["data"][0]
+                check("在途量增加 20", after_ship["in_transit"], before_transit + 20)
+                check("ledger 與快取零差額", after_ship["balance_diff"], 0.0)
+
+                line_id = client.get("/api/transfers/transfer-orders")[1]["data"][0]["lines"][0]["id"]
+                received = client.post(
+                    f"/api/transfers/transfer-orders/{order_id}/receive",
+                    {"receipts": [{"line_id": line_id, "quantity": 20, "location_id": nh_loc}]},
+                )
+                check("調貨收貨", received[0], 200)
+                check("狀態為已收貨", received[1]["status"], "received")
+
+                after_recv = client.get("/api/stock/query?q=IT-000001")[1]["data"][0]
+                check("在途量回復", after_recv["in_transit"], before_transit)
+                check(
+                    "在手量 = 實體倉合計 + 在途量",
+                    after_recv["on_hand"],
+                    after_recv["real_on_hand"] + after_recv["in_transit"],
+                )
+
+                status, body = admin.get("/api/audit-logs?limit=800")
+                acts = {r["action"] for r in body["data"]}
+                check("稽核含 TRANSFER_SHIPPED", "TRANSFER_SHIPPED" in acts, True)
+                check("稽核含 TRANSFER_RECEIVED", "TRANSFER_RECEIVED" in acts, True)
 
         print()
         if failures:

@@ -66,13 +66,35 @@ export default function StockQuery() {
       </div>
 
       {error && <div className="alert error">{error}</div>}
-      {searched && !loading && (
-        <p className="hint">
-          共 {rows.length} 筆。點擊列可展開各庫存位置明細。在手量含在途；可用量 = 在手量 − 已配置數量。
-        </p>
+
+      {rows.length > 0 && (
+        <div className="grid-3" style={{ marginBottom: 16 }}>
+          <div className="card stat accent">
+            <span className="label">商品數</span>
+            <span className="value">
+              {rows.length}
+              <span className="unit">項</span>
+            </span>
+          </div>
+          <div className="card stat">
+            <span className="label">在手量合計</span>
+            <span className="value">
+              {rows.reduce((sum, r) => sum + r.on_hand, 0).toLocaleString()}
+              <span className="unit">件</span>
+            </span>
+          </div>
+          <div className="card stat warn">
+            <span className="label">在途量合計</span>
+            <span className="value">
+              {rows.reduce((sum, r) => sum + r.in_transit, 0).toLocaleString()}
+              <span className="unit">件</span>
+            </span>
+          </div>
+        </div>
       )}
 
       <div className="panel">
+        <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -88,14 +110,18 @@ export default function StockQuery() {
           <tbody>
             {rows.length === 0 && searched && !loading && (
               <tr>
-                <td colSpan={7} className="muted">
-                  查無符合的商品
+                <td colSpan={7}>
+                  <div className="empty">
+                    <div className="big">查無符合的商品</div>
+                    換個關鍵字，或按「清除」看全部商品
+                  </div>
                 </td>
               </tr>
             )}
             {rows.map((row) => (
               <Fragment key={row.id}>
                 <tr
+                  className="expandable"
                   onClick={() => toggle(row)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
@@ -106,7 +132,6 @@ export default function StockQuery() {
                   tabIndex={0}
                   role="button"
                   aria-expanded={expanded === row.id}
-                  style={{ cursor: 'pointer' }}
                 >
                   <td>{row.code}</td>
                   <td>{row.name}</td>
@@ -119,9 +144,10 @@ export default function StockQuery() {
                   <td className="num">{row.suggested_price}</td>
                 </tr>
                 {expanded === row.id && (
-                  <tr>
-                    <td colSpan={7} style={{ background: '#fafbfc' }}>
-                      <table>
+                  <tr className="detail-row">
+                    <td colSpan={7}>
+                      <div className="table-wrap">
+                        <table>
                         <thead>
                           <tr>
                             <th>倉庫</th>
@@ -150,6 +176,7 @@ export default function StockQuery() {
                           ))}
                         </tbody>
                       </table>
+                      </div>
                     </td>
                   </tr>
                 )}
@@ -157,6 +184,7 @@ export default function StockQuery() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </>
   )

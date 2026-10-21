@@ -29,34 +29,65 @@ export default function Login() {
 
   return (
     <div className="login-wrap">
-      <form className="login-card" onSubmit={handleSubmit}>
-        <h1>庫存管理系統</h1>
-        <p className="sub">請以公司帳號登入</p>
+      <section className="login-hero">
+        <div className="eyebrow">AILearn Inventory</div>
+        <h1>
+          讓庫存、單據、
+          <br />
+          成本與毛利
+          <br />
+          對得上
+        </h1>
+        <p>
+          多倉庫進銷存系統。商品 → 單據 → 餘額 → 成本 → 毛利，
+          每一個數字都追得回來源、查得出是誰動的。
+        </p>
+        <ul>
+          <li>多倉庫、多庫存位置，批次與效期完整追蹤</li>
+          <li>五種角色權限，操作紀錄不可刪除</li>
+          <li>入庫、調貨、銷貨、采购、盤點一條主線</li>
+        </ul>
+      </section>
 
-        <label htmlFor="username">帳號</label>
-        <input
-          id="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          autoComplete="username"
-          autoFocus
-        />
+      <section className="login-side">
+        <form className="login-card" onSubmit={handleSubmit}>
+          <h1>登入</h1>
+          <p className="sub">請以公司帳號登入系統</p>
 
-        <label htmlFor="password">密碼</label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete="current-password"
-        />
+          <label htmlFor="username">帳號</label>
+          <input
+            id="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            autoFocus
+          />
 
-        <button type="submit" disabled={busy}>
-          {busy ? '登入中…' : '登入'}
-        </button>
+          <label htmlFor="password" style={{ marginTop: 14 }}>
+            密碼
+          </label>
+          <input
+            id="password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
 
-        {error && <div className="alert error">{error}</div>}
-      </form>
+          <button type="submit" disabled={busy}>
+            {busy ? '登入中…' : '登入'}
+          </button>
+
+          {error && <div className="alert error">{error}</div>}
+
+          <div className="login-hint">
+            示範帳號：<code>admin</code> <code>warehouse</code> <code>purchasing</code>{' '}
+            <code>sales</code> <code>accounting</code>
+            <br />
+            初始密碼見 <code>backend/.env</code> 的 SEED_PASSWORD；首次登入會要求更改密碼。
+          </div>
+        </form>
+      </section>
     </div>
   )
 }

@@ -66,6 +66,7 @@ export default function MasterData() {
       {error && <div className="alert error">{error}</div>}
 
       <div className="panel">
+        <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -112,15 +113,15 @@ export default function MasterData() {
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={5} className="muted">
-                  載入中…
+                <td colSpan={5}>
+                  <div className="empty">載入中…</div>
                 </td>
               </tr>
             )}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="muted">
-                  {error ? '查詢失敗' : '尚無資料'}
+                <td colSpan={5}>
+                  <div className="empty">{error ? '查詢失敗' : '尚無資料'}</div>
                 </td>
               </tr>
             )}
@@ -175,6 +176,7 @@ export default function MasterData() {
               ))}
           </tbody>
         </table>
+        </div>
       </div>
     </>
   )

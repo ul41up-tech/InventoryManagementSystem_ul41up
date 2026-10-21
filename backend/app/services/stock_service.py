@@ -18,11 +18,13 @@ import datetime as dt
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ..extensions import db
 from ..models import (
     MOVE_GRN,
+    MOVE_TRANSFER_IN,
+    MOVE_TRANSFER_OUT,
     Allocation,
     Batch,
     Grn,
@@ -33,7 +35,10 @@ from ..models import (
     PurchaseOrderLine,
     StockBalance,
     StockLedger,
+    TransferOrder,
+    TransferOrderLine,
     User,
+    Warehouse,
 )
 from ..security import write_audit
 
@@ -87,6 +92,15 @@ def next_grn_code(date: dt.date) -> str:
     day = f"GR-{date:%Y%m%d}-"
     rows = db.session.execute(
         select(Grn.code).where(Grn.code.like(f"{day}%"))
+    ).scalars().all()
+    return _next_daily_code(day, list(rows))
+
+
+def next_transfer_code(date: dt.date) -> str:
+    """調貨單編號：TO-YYYYMMDD-NNN（PRD FR-18）。"""
+    day = f"TO-{date:%Y%m%d}-"
+    rows = db.session.execute(
+        select(TransferOrder.code).where(TransferOrder.code.like(f"{day}%"))
     ).scalars().all()
     return _next_daily_code(day, list(rows))
 
@@ -310,3 +324,296 @@ def post_grn(
 
     db.session.flush()
     return PostGrnResult(grn=grn, batch_codes=batch_codes)
+
+
+# ------------------------------------------------------------
+# 移轉與調貨（PRD FR-11、FR-18）
+# ------------------------------------------------------------
+
+
+@dataclass
+class TransferLineInput:
+    """一筆調貨明細。"""
+
+    item_id: int
+    batch_id: int
+    from_location_id: int
+    quantity: Decimal
+
+
+def _transit_location() -> Location:
+    """取得在途用的虛擬庫位（TRANSIT）。"""
+    transit_warehouse = (
+        db.session.query(Warehouse).filter(Warehouse.is_virtual.is_(True)).first()
+    )
+    if transit_warehouse is None:
+        raise StockError("系統缺少在途虛擬位置，無法執行跨倉調貨")
+    location = (
+        db.session.query(Location)
+        .filter(Location.warehouse_id == transit_warehouse.id)
+        .first()
+    )
+    if location is None:
+        raise StockError("找不到在途虛擬庫位")
+    return location
+
+
+def _location_available(item_id: int, batch_id: int, location_id: int) -> Decimal:
+    """某庫位的可用量 = 該庫位餘額 − 該庫位配置量。"""
+    balance = (
+        db.session.query(StockBalance)
+        .filter_by(item_id=item_id, batch_id=batch_id, location_id=location_id)
+        .first()
+    )
+    on_hand = Decimal(str(balance.qty or 0)) if balance else Decimal("0")
+    allocated = (
+        db.session.query(func.coalesce(func.sum(Allocation.qty), 0))
+        .filter(
+            Allocation.item_id == item_id,
+            Allocation.batch_id == batch_id,
+            Allocation.location_id == location_id,
+            Allocation.status == "active",
+        )
+        .scalar()
+    )
+    return on_hand - Decimal(str(allocated or 0))
+
+
+def move_stock(
+    *,
+    operator: User,
+    item_id: int,
+    batch_id: int,
+    from_location_id: int,
+    to_location_id: int,
+    quantity: Decimal,
+    note: str | None = None,
+) -> None:
+    """同倉移轉：來源庫位 −N、目標庫位 +N（總量守恆、不產生在途）。"""
+    if from_location_id == to_location_id:
+        raise StockError("來源與目標庫位不可相同")
+    if quantity <= 0:
+        raise StockError("移轉數量必須大於 0")
+
+    available = _location_available(item_id, batch_id, from_location_id)
+    if quantity > available:
+        raise StockError(
+            f"移轉數量 {quantity} 超過來源庫位可用量 {available}"
+        )
+
+    apply_stock_change(
+        item_id=item_id,
+        batch_id=batch_id,
+        location_id=from_location_id,
+        qty=-quantity,
+        move_type=MOVE_TRANSFER_OUT,
+        operator=operator,
+        source_type="MOVE",
+        note=note or "同倉移轉（移出）",
+    )
+    apply_stock_change(
+        item_id=item_id,
+        batch_id=batch_id,
+        location_id=to_location_id,
+        qty=quantity,
+        move_type=MOVE_TRANSFER_IN,
+        operator=operator,
+        source_type="MOVE",
+        note=note or "同倉移轉（移入）",
+    )
+    assert_available_non_negative(item_id)
+
+    write_audit(
+        "STOCK_MOVED",
+        operator=operator,
+        doc_type="move",
+        item_id=item_id,
+        batch_id=batch_id,
+        location_id=from_location_id,
+        qty=quantity,
+        detail=f"同倉移轉至庫位 {to_location_id}",
+    )
+
+
+def create_transfer(
+    *,
+    operator: User,
+    from_warehouse_id: int,
+    to_warehouse_id: int,
+    lines: list[TransferLineInput],
+    demand_source: str | None = None,
+) -> TransferOrder:
+    """建立調貨單（草稿）。不動庫存。"""
+    if from_warehouse_id == to_warehouse_id:
+        raise StockError("來源倉庫與目的倉庫不可相同")
+    if not lines:
+        raise StockError("調貨單至少需要一筆明細")
+    for line in lines:
+        if line.quantity <= 0:
+            raise StockError("調貨數量必須大於 0")
+        available = _location_available(line.item_id, line.batch_id, line.from_location_id)
+        if line.quantity > available:
+            raise StockError(
+                f"調貨數量 {line.quantity} 超過來源庫位可用量 {available}"
+            )
+
+    order = TransferOrder(
+        code=next_transfer_code(dt.date.today()),
+        from_warehouse_id=from_warehouse_id,
+        to_warehouse_id=to_warehouse_id,
+        status="draft",
+        demand_source=demand_source,
+    )
+    db.session.add(order)
+    db.session.flush()
+
+    for line in lines:
+        db.session.add(
+            TransferOrderLine(
+                to_id=order.id,
+                item_id=line.item_id,
+                batch_id=line.batch_id,
+                from_location_id=line.from_location_id,
+                quantity=line.quantity,
+            )
+        )
+
+    write_audit(
+        "TRANSFER_CREATED",
+        operator=operator,
+        doc_type="transfer_order",
+        doc_id=order.code,
+        detail=f"{len(lines)} 筆明細",
+    )
+    db.session.flush()
+    return order
+
+
+def ship_transfer(*, operator: User, order: TransferOrder) -> TransferOrder:
+    """調貨出庫：來源庫位 → 在途位置。"""
+    if order.status != "draft":
+        raise StockError(f"調貨單目前狀態為「{order.status}」，不可出庫")
+    lines = db.session.query(TransferOrderLine).filter_by(to_id=order.id).all()
+    if not lines:
+        raise StockError("調貨單沒有明細")
+
+    transit = _transit_location()
+    for line in lines:
+        available = _location_available(line.item_id, line.batch_id, line.from_location_id)
+        if line.quantity > available:
+            raise StockError(
+                f"調貨數量 {line.quantity} 超過來源庫位可用量 {available}"
+            )
+        apply_stock_change(
+            item_id=line.item_id,
+            batch_id=line.batch_id,
+            location_id=line.from_location_id,
+            qty=-line.quantity,
+            move_type=MOVE_TRANSFER_OUT,
+            operator=operator,
+            source_type="TRANSFER",
+            source_id=order.id,
+            note=f"調貨單 {order.code} 移出",
+        )
+        apply_stock_change(
+            item_id=line.item_id,
+            batch_id=line.batch_id,
+            location_id=transit.id,
+            qty=line.quantity,
+            move_type=MOVE_TRANSFER_OUT,
+            operator=operator,
+            source_type="TRANSFER",
+            source_id=order.id,
+            note=f"調貨單 {order.code} 在途",
+        )
+        assert_available_non_negative(line.item_id)
+        write_audit(
+            "TRANSFER_SHIPPED",
+            operator=operator,
+            doc_type="transfer_order",
+            doc_id=order.code,
+            item_id=line.item_id,
+            batch_id=line.batch_id,
+            location_id=line.from_location_id,
+            qty=line.quantity,
+            detail="調貨出庫，數量轉為在途",
+        )
+
+    order.status = "in_transit"
+    order.ship_date = dt.date.today()
+    db.session.flush()
+    return order
+
+
+def receive_transfer(
+    *,
+    operator: User,
+    order: TransferOrder,
+    receipts: list[tuple[int, Decimal, int]],
+) -> TransferOrder:
+    """調貨收貨：在途位置 → 目的庫位。`receipts` 為 (明細 id, 實收數量, 目的庫位 id)。"""
+    if order.status != "in_transit":
+        raise StockError(f"調貨單目前狀態為「{order.status}」，不可收貨")
+
+    transit = _transit_location()
+    lines = {line.id: line for line in db.session.query(TransferOrderLine).filter_by(to_id=order.id).all()}
+
+    for line_id, received_qty, to_location_id in receipts:
+        line = lines.get(line_id)
+        if line is None:
+            raise StockError("收貨明細不屬於此調貨單")
+        if received_qty < 0:
+            raise StockError("收貨數量不可為負")
+        if received_qty > line.quantity:
+            raise StockError(
+                f"收貨數量 {received_qty} 不得大於調出數量 {line.quantity}"
+            )
+        if received_qty == 0:
+            continue
+
+        apply_stock_change(
+            item_id=line.item_id,
+            batch_id=line.batch_id,
+            location_id=transit.id,
+            qty=-received_qty,
+            move_type=MOVE_TRANSFER_IN,
+            operator=operator,
+            source_type="TRANSFER",
+            source_id=order.id,
+            note=f"調貨單 {order.code} 在途收回",
+        )
+        apply_stock_change(
+            item_id=line.item_id,
+            batch_id=line.batch_id,
+            location_id=to_location_id,
+            qty=received_qty,
+            move_type=MOVE_TRANSFER_IN,
+            operator=operator,
+            source_type="TRANSFER",
+            source_id=order.id,
+            note=f"調貨單 {order.code} 收貨",
+        )
+        assert_available_non_negative(line.item_id)
+
+        line.received_quantity = received_qty
+        shortage = line.quantity - received_qty
+        write_audit(
+            "TRANSFER_RECEIVED",
+            operator=operator,
+            doc_type="transfer_order",
+            doc_id=order.code,
+            item_id=line.item_id,
+            batch_id=line.batch_id,
+            location_id=to_location_id,
+            qty=received_qty,
+            reason="短缺" if shortage > 0 else None,
+            detail=(
+                f"收貨 {received_qty}／調出 {line.quantity}"
+                + (f"，短缺 {shortage} 留在在途待調整" if shortage > 0 else "")
+            ),
+        )
+
+    order.status = "received"
+    order.receive_date = dt.date.today()
+    db.session.flush()
+    return order

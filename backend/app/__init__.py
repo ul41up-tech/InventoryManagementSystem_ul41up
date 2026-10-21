@@ -36,6 +36,7 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     from .api.purchase import purchase_bp
     from .api.receiving import receiving_bp
     from .api.stock import stock_bp
+    from .api.transfers import transfer_bp
     from .api.users import users_bp
     from .auth import auth_bp
 
@@ -46,6 +47,7 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     app.register_blueprint(users_bp)
     app.register_blueprint(purchase_bp)
     app.register_blueprint(receiving_bp)
+    app.register_blueprint(transfer_bp)
 
     from .seed import register_seed_command
 

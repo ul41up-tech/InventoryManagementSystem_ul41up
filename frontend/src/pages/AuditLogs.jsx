@@ -56,6 +56,7 @@ export default function AuditLogs() {
       {error && <div className="alert error">{error}</div>}
 
       <div className="panel">
+        <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -70,8 +71,8 @@ export default function AuditLogs() {
           <tbody>
             {rows.length === 0 && !loading && (
               <tr>
-                <td colSpan={6} className="muted">
-                  {error ? '查詢失敗' : '尚無紀錄'}
+                <td colSpan={6}>
+                  <div className="empty">{error ? '查詢失敗' : '尚無紀錄'}</div>
                 </td>
               </tr>
             )}
@@ -91,6 +92,7 @@ export default function AuditLogs() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </>
   )
