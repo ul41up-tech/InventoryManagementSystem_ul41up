@@ -1,0 +1,26 @@
+# --- Python / 後端 ---
+backend/.venv/
+backend/.env
+backend/instance/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# --- 前端 / Node ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# --- 環境與本機工具 ---
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- BMAD 產出（保留規劃文件，忽略暫存與渲染快照）---
+_bmad/render/
+_bmad-output/implementation-artifacts/*.tmp
