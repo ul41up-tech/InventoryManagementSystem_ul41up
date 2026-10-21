@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 from functools import wraps
 
 from flask import Blueprint, jsonify, request, session
@@ -13,6 +12,8 @@ from flask import Blueprint, jsonify, request, session
 from .extensions import db
 from .models import ALL_ROLES, User
 from .security import (
+    PasswordTooLongError,
+    hash_password,
     is_locked,
     register_failed_attempt,
     reset_failed_attempts,
@@ -24,10 +25,13 @@ from .timeutil import utcnow
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
 GENERIC_LOGIN_ERROR = "帳號或密碼錯誤"
+MIN_PASSWORD_LENGTH = 8
 
 
 def request_json() -> dict:
-    return request.get_json(silent=True) or {}
+    """取得 JSON 物件；非物件（陣列、純量、缺漏）一律視為空物件。"""
+    payload = request.get_json(silent=True)
+    return payload if isinstance(payload, dict) else {}
 
 
 def current_user() -> User | None:
@@ -64,8 +68,10 @@ def require_roles(*roles: str):
 @auth_bp.post("/login")
 def login():
     payload = request_json()
-    username = (payload.get("username") or "").strip()
-    password = payload.get("password") or ""
+    raw_username = payload.get("username")
+    raw_password = payload.get("password")
+    username = str(raw_username or "").strip()
+    password = str(raw_password or "")
 
     if not username or not password:
         return jsonify({"error": "請輸入帳號與密碼"}), 400
@@ -88,8 +94,12 @@ def login():
         return jsonify({"error": "帳號已停用"}), 403
 
     if not verify_password(password, user.password_hash):
-        register_failed_attempt(user)
-        write_audit("LOGIN_FAILED", operator=user, detail="密碼錯誤")
+        just_locked = register_failed_attempt(user)
+        write_audit(
+            "ACCOUNT_LOCKED" if just_locked else "LOGIN_FAILED",
+            operator=user,
+            detail="密碼錯誤，帳號已鎖定" if just_locked else "密碼錯誤",
+        )
         db.session.commit()
         return jsonify({"error": GENERIC_LOGIN_ERROR}), 401
 
@@ -101,17 +111,7 @@ def login():
     write_audit("LOGIN_SUCCESS", operator=user)
     db.session.commit()
 
-    return jsonify(
-        {
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "name": user.name,
-                "role": user.role,
-                "must_change_password": user.must_change_password,
-            }
-        }
-    )
+    return jsonify({"user": _public_user(user)})
 
 
 @auth_bp.post("/logout")
@@ -127,13 +127,44 @@ def logout():
 @auth_bp.get("/me")
 @require_roles(*ALL_ROLES)
 def me():
+    return jsonify(_public_user(current_user()))
+
+
+@auth_bp.post("/change-password")
+@require_roles(*ALL_ROLES)
+def change_password():
+    """首次登入後強制修改密碼的實際流程（PRD FR-1、FR-26）。"""
+    payload = request_json()
+    old_password = str(payload.get("old_password") or "")
+    new_password = str(payload.get("new_password") or "")
+
     user = current_user()
-    return jsonify(
-        {
-            "id": user.id,
-            "username": user.username,
-            "name": user.name,
-            "role": user.role,
-            "must_change_password": user.must_change_password,
-        }
-    )
+    if not verify_password(old_password, user.password_hash):
+        write_audit("PASSWORD_CHANGE_FAILED", operator=user, detail="舊密碼驗證失敗")
+        db.session.commit()
+        return jsonify({"error": "舊密碼不正確"}), 400
+
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        return jsonify({"error": f"新密碼至少 {MIN_PASSWORD_LENGTH} 個字元"}), 400
+    if new_password == old_password:
+        return jsonify({"error": "新密碼不可與舊密碼相同"}), 400
+
+    try:
+        user.password_hash = hash_password(new_password)
+    except PasswordTooLongError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    user.must_change_password = False
+    write_audit("PASSWORD_CHANGED", operator=user)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+def _public_user(user: User) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "name": user.name,
+        "role": user.role,
+        "must_change_password": user.must_change_password,
+    }

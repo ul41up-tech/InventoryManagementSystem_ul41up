@@ -10,21 +10,9 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import create_app  # noqa: E402
-from app.config import Config  # noqa: E402
+from app.config import TestConfig  # noqa: E402
 from app.extensions import db as _db  # noqa: E402
 from app.seed import _seed  # noqa: E402
-
-
-class TestConfig(Config):
-    """測試用設定：以 SQLite 記憶體資料庫取代 PostgreSQL（不需外部服務）。"""
-
-    TESTING = True
-    SQLALCHEMY_DATABASE_URI = "sqlite://"
-    SQLALCHEMY_ENGINE_OPTIONS = {}
-    SECRET_KEY = "test-secret"
-    SEED_PASSWORD = "Test@1234"
-    LOGIN_MAX_ATTEMPTS = 5
-    LOGIN_LOCK_MINUTES = 15
 
 
 @pytest.fixture()

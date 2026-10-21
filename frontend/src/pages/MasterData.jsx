@@ -1,35 +1,58 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
+import { useAuth } from '../App.jsx'
 
-const TABS = [
-  { key: 'items', label: '商品', fetcher: api.items },
-  { key: 'suppliers', label: '供應商', fetcher: api.suppliers },
-  { key: 'customers', label: '客戶', fetcher: api.customers },
-  { key: 'warehouses', label: '倉庫', fetcher: api.warehouses },
-  { key: 'locations', label: '庫存位置', fetcher: api.locations },
+const ALL_TABS = [
+  { key: 'items', label: '商品', fetcher: api.items, roles: ['admin', 'warehouse', 'purchasing', 'sales', 'accounting'] },
+  { key: 'suppliers', label: '供應商', fetcher: api.suppliers, roles: ['admin', 'purchasing', 'sales', 'accounting'] },
+  { key: 'customers', label: '客戶', fetcher: api.customers, roles: ['admin', 'purchasing', 'sales', 'accounting'] },
+  { key: 'warehouses', label: '倉庫', fetcher: api.warehouses, roles: ['admin', 'accounting'] },
+  { key: 'locations', label: '庫存位置', fetcher: api.locations, roles: ['admin', 'accounting'] },
 ]
 
 export default function MasterData() {
-  const [tab, setTab] = useState('items')
+  const { user } = useAuth()
+  const tabs = ALL_TABS.filter((t) => t.roles.includes(user?.role))
+  const [tab, setTab] = useState(tabs[0]?.key ?? 'items')
   const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    const current = TABS.find((t) => t.key === tab)
+    let alive = true
+    const current = ALL_TABS.find((t) => t.key === tab)
+    if (!current) return undefined
+    setLoading(true)
     setError('')
     current
       .fetcher()
-      .then((data) => setRows(data.data))
+      .then((data) => {
+        if (alive) setRows(data.data)
+      })
       .catch((err) => {
+        if (!alive) return
         setError(err.message)
         setRows([])
       })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
   }, [tab])
+
+  // 角色可用頁籤變動時，確保目前選中的是可用的
+  useEffect(() => {
+    if (!tabs.some((t) => t.key === tab) && tabs.length > 0) {
+      setTab(tabs[0].key)
+    }
+  }, [tabs, tab])
 
   return (
     <>
       <div className="toolbar">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.key}
             className={tab === t.key ? '' : 'secondary'}
@@ -87,52 +110,69 @@ export default function MasterData() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => (
-              <tr key={row.id ?? index}>
-                {tab === 'items' && (
-                  <>
-                    <td>{row.code}</td>
-                    <td>{row.name}</td>
-                    <td>{row.unit}</td>
-                    <td className="num">{row.suggested_price}</td>
-                    <td className="num">
-                      {row.target_margin_rate ? `${(row.target_margin_rate * 100).toFixed(0)}%` : '—'}
-                    </td>
-                  </>
-                )}
-                {tab === 'suppliers' && (
-                  <>
-                    <td>{row.tax_id}</td>
-                    <td>{row.name}</td>
-                    <td>{row.contact}</td>
-                    <td>{row.phone}</td>
-                  </>
-                )}
-                {tab === 'customers' && (
-                  <>
-                    <td>{row.name}</td>
-                    <td>{row.contact}</td>
-                    <td>{row.phone}</td>
-                  </>
-                )}
-                {tab === 'warehouses' && (
-                  <>
-                    <td>{row.code}</td>
-                    <td>{row.name}</td>
-                    <td>{row.is_virtual ? '虛擬（在途）' : '實體'}</td>
-                  </>
-                )}
-                {tab === 'locations' && (
-                  <>
-                    <td>{row.code}</td>
-                    <td>{row.name}</td>
-                    <td>
-                      {row.warehouse_code} {row.warehouse_name}
-                    </td>
-                  </>
-                )}
+            {loading && (
+              <tr>
+                <td colSpan={5} className="muted">
+                  載入中…
+                </td>
               </tr>
-            ))}
+            )}
+            {!loading && rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="muted">
+                  {error ? '查詢失敗' : '尚無資料'}
+                </td>
+              </tr>
+            )}
+            {!loading &&
+              rows.map((row, index) => (
+                <tr key={row.id ?? index}>
+                  {tab === 'items' && (
+                    <>
+                      <td>{row.code}</td>
+                      <td>{row.name}</td>
+                      <td>{row.unit}</td>
+                      <td className="num">{row.suggested_price}</td>
+                      <td className="num">
+                        {row.target_margin_rate != null
+                          ? `${(row.target_margin_rate * 100).toFixed(0)}%`
+                          : '—'}
+                      </td>
+                    </>
+                  )}
+                  {tab === 'suppliers' && (
+                    <>
+                      <td>{row.tax_id}</td>
+                      <td>{row.name}</td>
+                      <td>{row.contact}</td>
+                      <td>{row.phone}</td>
+                    </>
+                  )}
+                  {tab === 'customers' && (
+                    <>
+                      <td>{row.name}</td>
+                      <td>{row.contact ?? '—'}</td>
+                      <td>{row.phone ?? '—'}</td>
+                    </>
+                  )}
+                  {tab === 'warehouses' && (
+                    <>
+                      <td>{row.code}</td>
+                      <td>{row.name}</td>
+                      <td>{row.is_virtual ? '虛擬（在途）' : '實體'}</td>
+                    </>
+                  )}
+                  {tab === 'locations' && (
+                    <>
+                      <td>{row.code}</td>
+                      <td>{row.name}</td>
+                      <td>
+                        {row.warehouse_code} {row.warehouse_name}
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
           </tbody>
         </table>
       </div>

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 
 export default function StockQuery() {
@@ -8,19 +8,23 @@ export default function StockQuery() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
+  const searchSeq = useRef(0)
 
   async function search(q = keyword) {
+    const seq = ++searchSeq.current
     setLoading(true)
     setError('')
     try {
       const data = await api.stockQuery(q)
+      if (seq !== searchSeq.current) return // 捨棄過期的回應
       setRows(data.data)
       setSearched(true)
     } catch (err) {
+      if (seq !== searchSeq.current) return
       setError(err.message)
       setRows([])
     } finally {
-      setLoading(false)
+      if (seq === searchSeq.current) setLoading(false)
     }
   }
 
@@ -30,6 +34,12 @@ export default function StockQuery() {
 
   function toggle(item) {
     setExpanded(expanded === item.id ? null : item.id)
+  }
+
+  function clearAll() {
+    setKeyword('')
+    setExpanded(null)
+    search('')
   }
 
   return (
@@ -50,7 +60,7 @@ export default function StockQuery() {
         <button onClick={() => search()} disabled={loading}>
           {loading ? '查詢中…' : '查詢'}
         </button>
-        <button className="secondary" onClick={() => { setKeyword(''); search('') }}>
+        <button className="secondary" onClick={clearAll}>
           清除
         </button>
       </div>
@@ -85,7 +95,19 @@ export default function StockQuery() {
             )}
             {rows.map((row) => (
               <Fragment key={row.id}>
-                <tr onClick={() => toggle(row)} style={{ cursor: 'pointer' }}>
+                <tr
+                  onClick={() => toggle(row)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      toggle(row)
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-expanded={expanded === row.id}
+                  style={{ cursor: 'pointer' }}
+                >
                   <td>{row.code}</td>
                   <td>{row.name}</td>
                   <td className="num">{row.on_hand}</td>

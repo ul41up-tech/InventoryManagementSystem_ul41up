@@ -3,7 +3,11 @@
 建立可登入的五種角色帳號、示範倉庫／位置、供應商、客戶、商品、批次，
 以及對應的庫存異動帳與餘額（PRD §6.1 種子資料為交付物；AC-8 要求冪等）。
 
-預設密碼由環境變數 SEED_PASSWORD 提供，**不得硬編碼於版本控制**。
+原則：
+- **冪等且可重複執行**：以「物件是否已存在」判斷，而非以整張表是否為空判斷。
+- **不覆蓋既有帳號的角色與姓名**（那是管理者在系統內的調整）。
+- 僅在帳號**尚未自行改過密碼**（must_change_password 仍為 True）時套用新密碼。
+- 密碼由環境變數 SEED_PASSWORD 或互動提示提供，不在原始碼內留預設值。
 """
 
 from __future__ import annotations
@@ -16,6 +20,8 @@ from flask.cli import with_appcontext
 
 from .extensions import db
 from .models import (
+    MOVE_GRN,
+    MOVE_TRANSFER_OUT,
     ROLE_ADMIN,
     ROLE_ACCOUNTING,
     ROLE_PURCHASING,
@@ -62,24 +68,57 @@ SEED_ITEMS = [
     ("IT-000005", "矽膠按键 紅色", "個", 28, 0.40, 1, True),
 ]
 
+# (item index, 倉庫, 位置, 數量, 實際單價, 批次序號)
+# 批次序號固定不變，讓重跑種子時能辨識同一批資料（冪等）。
+SEED_STOCK = [
+    (0, "WH-NH", "A-01", Decimal("120"), Decimal("45"), 1),
+    (0, "WH-NH", "A-02", Decimal("30"), Decimal("45"), 2),
+    (0, "WH-KH", "B-01", Decimal("200"), Decimal("46"), 3),
+    (1, "WH-NH", "A-01", Decimal("80"), Decimal("32"), 4),
+    (1, "WH-KH", "B-01", Decimal("150"), Decimal("33"), 5),
+    (2, "WH-NH", "A-02", Decimal("25"), Decimal("1150"), 6),
+    (3, "WH-NH", "A-01", Decimal("60"), Decimal("245"), 7),
+    (3, "WH-KH", "B-01", Decimal("40"), Decimal("250"), 8),
+    (4, "WH-NH", "A-02", Decimal("500"), Decimal("16"), 9),
+]
+
+SEED_IN_DATE = dt.date(2026, 4, 15)
+SEED_TRANSIT_QTY = Decimal("15")
+
 
 def register_seed_command(app):
     @app.cli.command("seed")
-    @click.option("--password", default=None, help="種子帳號密碼；預設取環境變數 SEED_PASSWORD。")
+    @click.option(
+        "--password",
+        prompt=True,
+        hide_input=True,
+        confirmation_prompt=False,
+        default=None,
+        help="種子帳號初始密碼；留空則取環境變數 SEED_PASSWORD。",
+    )
     @with_appcontext
     def seed(password: str | None):
         """建立或更新種子資料（冪等）。"""
-        pwd = password or app.config["SEED_PASSWORD"]
-        created = _seed(pwd)
-        click.echo(f"種子資料完成：{created}")
+        pwd = password or app.config.get("SEED_PASSWORD") or ""
+        if not pwd:
+            raise click.ClickException(
+                "未提供密碼：請設定環境變數 SEED_PASSWORD，或在提示時輸入。"
+                "（不接受預設值，避免所有種子帳號共用公開密碼）"
+            )
+        summary = _seed(pwd)
+        click.echo("種子資料完成：")
+        for line in summary:
+            click.echo(f"  - {line}")
+        click.echo("")
+        click.echo("提醒：所有種子帳號標記為「首次登入須修改密碼」，請於首次登入後立即更改。")
 
     return app
 
 
-def _seed(password: str) -> str:
-    summary = []
+def _seed(password: str) -> list[str]:
+    summary: list[str] = []
 
-    # --- 使用者 ---
+    # --- 使用者（不覆蓋既有帳號的角色與姓名）---
     for username, name, role in SEED_USERS:
         user = db.session.query(User).filter_by(username=username).first()
         if user is None:
@@ -91,12 +130,16 @@ def _seed(password: str) -> str:
                 must_change_password=True,
             )
             db.session.add(user)
-            summary.append(f"建立帳號 {username}")
+            summary.append(f"建立帳號 {username}（{role}）")
+        elif user.must_change_password:
+            # 尚未自行改過密碼 → 套用本次的初始密碼
+            user.password_hash = hash_password(password)
+            user.must_change_password = True
+            summary.append(f"重設帳號 {username} 的初始密碼")
         else:
-            user.role = role
-            user.name = name
-    db.session.flush()
+            summary.append(f"帳號 {username} 已存在且已改過密碼，略過")
 
+    db.session.flush()
     admin = db.session.query(User).filter_by(username="admin").first()
 
     # --- 倉庫（含虛擬在途位置）---
@@ -156,7 +199,7 @@ def _seed(password: str) -> str:
 
     # --- 商品 ---
     items: list[Item] = []
-    for idx, (code, name, unit, price, margin, sup_idx, primary) in enumerate(SEED_ITEMS, start=1):
+    for code, name, unit, price, margin, sup_idx, primary in SEED_ITEMS:
         item = db.session.query(Item).filter_by(code=code).first()
         if item is None:
             item = Item(
@@ -181,94 +224,95 @@ def _seed(password: str) -> str:
             )
     db.session.flush()
 
-    # --- 批次與庫存異動（僅在尚無任何 ledger 紀錄時建立，避免重複）---
-    if db.session.query(StockLedger).count() == 0:
-        operator = db.session.query(User).filter_by(username="warehouse").first()
-        in_date = dt.date(2026, 4, 15)
-        transit_source = None
+    # --- 批次與庫存異動（以批次是否存在判斷，可重複執行）---
+    operator = db.session.query(User).filter_by(username="warehouse").first()
+    transit_source: tuple[Batch, Location, Decimal] | None = None
 
-        # (item index, 倉庫, 位置, 數量, 實際單價)
-        stock_specs = [
-            (0, "WH-NH", "A-01", Decimal("120"), Decimal("45")),
-            (0, "WH-NH", "A-02", Decimal("30"), Decimal("45")),
-            (0, "WH-KH", "B-01", Decimal("200"), Decimal("46")),
-            (1, "WH-NH", "A-01", Decimal("80"), Decimal("32")),
-            (1, "WH-KH", "B-01", Decimal("150"), Decimal("33")),
-            (2, "WH-NH", "A-02", Decimal("25"), Decimal("1150")),
-            (3, "WH-NH", "A-01", Decimal("60"), Decimal("245")),
-            (3, "WH-KH", "B-01", Decimal("40"), Decimal("250")),
-            (4, "WH-NH", "A-02", Decimal("500"), Decimal("16")),
-        ]
-        for item_idx, wh_code, loc_code, qty, unit_cost in stock_specs:
-            item = items[item_idx]
-            seq = len([b for b in db.session.query(Batch).all()]) + 1
-            batch_code = f"B{in_date.strftime('%Y%m%d')}-{seq:03d}"
-            batch = Batch(
-                code=batch_code,
-                item_id=item.id,
-                supplier_id=suppliers[0].id,
-                actual_unit_cost=unit_cost,
-                quantity=qty,
-                in_date=in_date,
-            )
-            db.session.add(batch)
-            db.session.flush()
-
-            location = locations[f"{wh_code}/{loc_code}"]
-            db.session.add(
-                StockLedger(
-                    item_id=item.id,
-                    batch_id=batch.id,
-                    location_id=location.id,
-                    qty=qty,
-                    move_type="GRN",
-                    source_type="SEED",
-                    source_id=batch.id,
-                    operator_id=operator.id if operator else None,
-                    note="種子資料：初始入庫",
-                )
-            )
-            db.session.add(
-                StockBalance(
-                    item_id=item.id, batch_id=batch.id, location_id=location.id, qty=qty
-                )
-            )
-            summary.append(f"建立批次 {batch_code} × {qty}")
+    for item_idx, wh_code, loc_code, qty, unit_cost, batch_seq in SEED_STOCK:
+        item = items[item_idx]
+        batch_code = f"B{SEED_IN_DATE.strftime('%Y%m%d')}-{batch_seq:03d}"
+        batch = db.session.query(Batch).filter_by(code=batch_code).first()
+        if batch is not None:
             if item_idx == 0 and wh_code == "WH-KH":
-                transit_source = (batch, location, qty)
+                transit_source = (batch, locations[f"{wh_code}/{loc_code}"], qty)
+            continue  # 已經建立過，略過（冪等）
+        batch = Batch(
+            code=batch_code,
+            item_id=item.id,
+            supplier_id=suppliers[0].id,
+            actual_unit_cost=unit_cost,
+            quantity=qty,
+            in_date=SEED_IN_DATE,
+        )
+        db.session.add(batch)
+        db.session.flush()
 
-        # 一筆在途數量示範：IT-000001 由中港倉調往南港倉（尚未收貨）
-        # 同一批次：來源倉餘額減少、在途位置增加，批次剩餘量不變
-        if transit_source is not None:
-            batch, source_location, qty = transit_source
-            transit_qty = Decimal("15")
+        location = locations[f"{wh_code}/{loc_code}"]
+        db.session.add(
+            StockLedger(
+                item_id=item.id,
+                batch_id=batch.id,
+                location_id=location.id,
+                qty=qty,
+                move_type=MOVE_GRN,
+                source_type="SEED",
+                source_id=batch.id,
+                operator_id=operator.id if operator else None,
+                note="種子資料：初始入庫",
+            )
+        )
+        db.session.add(
+            StockBalance(
+                item_id=item.id, batch_id=batch.id, location_id=location.id, qty=qty
+            )
+        )
+        summary.append(f"建立批次 {batch_code} × {qty}")
+        if item_idx == 0 and wh_code == "WH-KH":
+            transit_source = (batch, location, qty)
+
+    # 在途示範：同一批次由中港倉移出 15 件至 TRANSIT（批次剩餘量守恆）
+    if transit_source is not None:
+        batch, source_location, _ = transit_source
+        transit = locations["TRANSIT/TRANSIT"]
+        already = (
+            db.session.query(StockBalance)
+            .filter_by(item_id=items[0].id, batch_id=batch.id, location_id=transit.id)
+            .first()
+        )
+        if already is not None:
+            summary.append("在途示範已存在，略過")
+        else:
             source_balance = (
                 db.session.query(StockBalance)
                 .filter_by(item_id=items[0].id, batch_id=batch.id, location_id=source_location.id)
-                .one()
+                .first()
             )
-            source_balance.qty = source_balance.qty - transit_qty
+            if source_balance is None:
+                raise click.ClickException(
+                    f"種子資料異常：找不到批次 {batch.code} 於 {source_location.code} 的餘額，"
+                    "無法建立在途示範"
+                )
+            source_balance.qty = source_balance.qty - SEED_TRANSIT_QTY
             db.session.add(
                 StockLedger(
                     item_id=items[0].id,
                     batch_id=batch.id,
                     location_id=source_location.id,
-                    qty=-transit_qty,
-                    move_type="TRANSFER_OUT",
+                    qty=-SEED_TRANSIT_QTY,
+                    move_type=MOVE_TRANSFER_OUT,
                     source_type="SEED",
                     source_id=batch.id,
                     operator_id=operator.id if operator else None,
                     note="種子資料：跨倉調貨移出",
                 )
             )
-            transit = locations["TRANSIT/TRANSIT"]
             db.session.add(
                 StockLedger(
                     item_id=items[0].id,
                     batch_id=batch.id,
                     location_id=transit.id,
-                    qty=transit_qty,
-                    move_type="TRANSFER_OUT",
+                    qty=SEED_TRANSIT_QTY,
+                    move_type=MOVE_TRANSFER_OUT,
                     source_type="SEED",
                     source_id=batch.id,
                     operator_id=operator.id if operator else None,
@@ -277,11 +321,14 @@ def _seed(password: str) -> str:
             )
             db.session.add(
                 StockBalance(
-                    item_id=items[0].id, batch_id=batch.id, location_id=transit.id, qty=transit_qty
+                    item_id=items[0].id,
+                    batch_id=batch.id,
+                    location_id=transit.id,
+                    qty=SEED_TRANSIT_QTY,
                 )
             )
-            summary.append("建立在途數量示範 15 件")
+            summary.append(f"建立在途數量示範 {SEED_TRANSIT_QTY} 件")
 
     write_audit("SEED_EXECUTED", operator=admin, detail="種子資料建立／更新")
     db.session.commit()
-    return "；".join(summary) if summary else "資料已存在，無變更"
+    return summary

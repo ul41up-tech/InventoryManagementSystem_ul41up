@@ -2,10 +2,12 @@
 title: MVP 切片 1：登入、權限與庫存查詢
 spec_id: mvp-slice-1
 route: dispatch
-status: in-progress
+status: in-review
 created: 2026-10-21
 updated: 2026-10-21
 date: 2026-10-21
+baseline_commit: 13a08e0
+review_loop_iteration: 0
 ---
 
 # MVP 切片 1：登入、權限與庫存查詢
@@ -98,9 +100,66 @@ date: 2026-10-21
 - **不寫入任何明文密碼**：種子資料的預設密碼以環境變數 `SEED_PASSWORD` 帶入，預設值僅供本機示範，且必須在 README 標示「首次登入後請修改」。
 - **不做**：條碼、權杖、多單位、PDF/列印、報表、匯出、離線、快取、RTL、國際化。
 
-## Open Questions
+## Tasks & Acceptance
 
-（無——密碼以環境變數注入，不需人類決策。）
+- [x] T-1 後端骨架：`create_app()`、設定、extensions、Flask-Migrate 綁定、錯誤處理
+- [x] T-2 完整資料模型（29 張表，含 `allocations`、`cost_consumptions`、`stock_adjustments`、`returns`、`customers`、`reorder_points`、TRANSIT 虛擬位置）
+- [x] T-3 認證：登入／登出／me、bcrypt、連續 5 次失敗鎖定 15 分鐘、鎖定與解鎖事件稽核
+- [x] T-4 伺服器端角色權限：`require_roles` 裝飾器 + PRD §4.1 矩陣逐格驗證 + 採購看不到客戶身分
+- [x] T-5 主檔 API：items（列表／建立）、suppliers、customers、warehouses、locations（依矩陣限制可見）
+- [x] T-6 庫存查詢 API：模糊搜尋、在手量／可用量／在途量、展開位置明細、依可用量排序、total 為符合筆數
+- [x] T-7 種子資料：5 種角色帳號、2 實體倉 + TRANSIT、位置、供應商、客戶、5 商品、9 批次、11 筆異動帳、冪等
+- [x] T-8 前端 React：登入頁、庫存查詢頁、主檔瀏覽頁、角色導覽、未登入導向、401 自動導回、錯誤邊界
+- [x] T-9 測試：43 項 pytest 驗收測試涵蓋 AC-1 ~ AC-9 與權限矩陣
+- [x] T-10 文件：README（設定、migration、seed、API 一覽、環境變數、常見問題、資安原則）、`.env.example`、`.gitignore`、`.gitattributes`、`pyproject.toml`（pytest/ruff 設定）
+- [x] T-12 初始 migration 產出：`backend/migrations/versions/0001_initial_schema.py`（由 `tools/generate_initial_migration.py` 產生，不需 DB 連線）
+- [x] T-13 審查修補（見 Review Triage Log）：時間戳預設值、可用量以 ledger 為準、權限矩陣落地、輸入驗證、稽核讀取端點、改密流程、種子冪等
+- [ ] T-11 在真實 PostgreSQL 上執行 `flask db upgrade` 與 `flask seed`（**待 PostgreSQL 密碼**；目前以 SQLite 記憶體庫驗證）
+
+## Verification
+
+```powershell
+cd backend
+.venv/Scripts/python.exe -m pytest tests -q     # 43 passed
+cd ..\frontend; npm run build                     # built successfully
+```
+
+## Spec Change Log
+
+- 2026-10-21 初版建立。實作期間未修改 `<frozen-after-approval>` 區塊。
+- 實作發現：種子資料的批次編號原以商品索引產生，會重複（同一商品多個位置）。已於 `app/seed.py` 改為固定序號（可重跑辨識同一批資料）；在途示範改為「同一批次由中港倉移出 15 件至 TRANSIT」，使批次剩餘量守恆。
+- 實作發現：`datetime.utcnow()` 於 Python 3.12+ 為棄用 API。已新增 `app/timeutil.py` 提供 `utcnow()` 並全面取代。
+- 審查後：`default=utcnow()` / `default=dt.date.today` 的括號會讓預設值在 import 時求值一次（所有列共用同一時間戳），已改為傳遞 callable。
+
+## Review Triage Log
+
+| 發現 | 判定 | 證據 | 路由 |
+| --- | --- | --- | --- |
+| `default=utcnow()` 在 import 時求值，所有列共用同一時間戳（含 `audit_logs.created_at`） | high | 讀 `models.py` 確認 `default=utcnow()` 會立即呼叫；`default=dt.date.today` 同型 | patch（已修：改傳 callable） |
+| 缺少 migration，`flask db upgrade` 無法建立 schema | high | 驗證落差審查實測 `flask db history` 無 revision | patch（已修：產出 0001_initial_schema.py，29 表） |
+| 在手量取自 `stock_balances` 快取而非 ledger，兩表分歧時數字會落後 | high | 改以 `stock_ledger` 為唯一來源，並回傳 `balance_diff` | patch（已修 + 新增測試） |
+| 「已分配」無存放位置，可用量被高估（無對應餘額的配置被忽略） | high | 審查指出配置與餘額的 join 會丟失孤兒配置 | patch（已修：商品層可用量 = 在手量 − 全部有效配置；位置層另計） |
+| PRD §4.1 權限矩陣未套用於主檔讀取（倉管可讀供應商／客戶／倉庫／位置） | high | 逐格比對矩陣與 `READABLE_BY` | patch（已修 + 矩陣參數化測試） |
+| 採購可見客戶聯絡人與電話，遮蔽不完整 | medium | PRD §4.1：採購不得見客戶名稱 | patch（已修：整列遮蔽） |
+| 種子資料以「整張 ledger 是否為空」守衛，已有資料時完全不會產生庫存 | medium | 讀 `seed.py` 守衛邏輯 | patch（已修：改為逐批次判斷 + 固定批次序號） |
+| 重跑種子會覆蓋既有帳號的角色 | medium | 讀 `seed.py` 使用者迴圈 | patch（已修：既有帳號不覆蓋角色／姓名） |
+| 鎖定期過後失敗次數未歸零，一次錯誤即重新鎖定 | medium | 讀 `security.is_locked` 邏輯 | patch（已修：到期時歸零並寫 ACCOUNT_UNLOCKED） |
+| 密碼長度超過 72 bytes 使 bcrypt 拋例外 | medium | bcrypt 5.0 限制 | patch（已修：明確拒絕並回 400） |
+| `SECRET_KEY`／`SEED_PASSWORD` 有公開預設值，缺 `.env` 仍可啟動 | medium | 讀 `config.py` 預設值 | patch（已修：SECRET_KEY 缺失即拒絕啟動；seed 無密碼即拒絕執行） |
+| `limit` 參數未驗證，`?limit=abc` 造成 500 | medium | 讀兩支 API | patch（已修：共用 `int_arg` 夾限） |
+| `POST /api/items` 接受非數字／超範圍金額，拋 500 | medium | 讀 `_to_decimal` | patch（已修：型別與範圍驗證，錯誤回 400） |
+| 缺少「更改密碼」流程，但種子帳號標記必須改密 | medium | 讀 `auth.py` 無此端點 | patch（已修：新增端點 + 前端頁面 + 首次登入導向） |
+| 缺少稽核紀錄讀取端點，FR-3「任何時間點可查」無法滿足 | medium | 讀 `models.AuditLog` 只寫不讀 | patch（已修：新增 `/api/audit-logs` 唯讀端點 + 前端頁） |
+| 500 錯誤未 rollback，SQLAlchemy session 狀態殘留 | medium | 讀 `__init__.py` | patch（已修：500 handler rollback + teardown 移除 session） |
+| `wsgi.py` 直接執行時開啟 Werkzeug 除錯器 | medium | 讀 `wsgi.py` | patch（已修：改由 `FLASK_DEBUG`  控制） |
+| `load_dotenv()` 未指定路徑，換工作目錄即讀不到設定 | medium | 讀 `config.py` | patch（已修：以檔案位置推導） |
+| 前端：session 過期不導回登入、列展開不能用鍵盤、`target_margin_rate = 0` 被當缺值 | medium | 審查指出；讀前端原始碼確認 | patch（已修：401 事件導向、鍵盤操作與 aria、null 判斷） |
+| 前端：主檔頁對所有角色顯示全部頁籤 | medium | PRD §4.1 矩陣 | patch（已修：依角色過濾頁籤與導覽） |
+| 稽核事件（鎖定／登出／建立商品／越權）無測試釘住 | medium | 驗證落差審查指出測試只斷言 LOGIN_* | patch（已修：逐事件斷言） |
+| 缺少 CSRF token 機制 | medium | 審查指出；PRD §4.9 未列 CSRF | defer（已記入 deferred-work.md） |
+| 缺少前端測試、前端 lint、CI、正式 WSGI 伺服器、容器化 | low | 審查指出 | defer（已記入 deferred-work.md） |
+| `stock_balances` 與 ledger 的一致性無強制對帳 | low | 寫入路徑於切片 2、3 尚未實作 | defer（已記入 deferred-work.md，於切片 2 以服務層落實） |
+| 審查指出「mojibake 中文字串」 | false | 原始碼為 UTF-8，測試斷言「帳號或密碼錯誤」通過；問題出在審查者讀到的 diff 檔編碼 | 無動作 |
 
 ## Deferred Work
 

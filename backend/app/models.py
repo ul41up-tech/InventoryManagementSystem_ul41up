@@ -43,7 +43,7 @@ MOVE_ADJUST = "ADJUST"  # 盤盈／盤虧／報廢
 
 
 class TimestampMixin:
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow(), nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
 class User(TimestampMixin, db.Model):
@@ -356,7 +356,7 @@ class Stocktake(TimestampMixin, db.Model):
     location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"), nullable=True)
     item_id: Mapped[int | None] = mapped_column(ForeignKey("items.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
-    started_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow(), nullable=False)
+    started_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -393,7 +393,7 @@ class StockLedger(db.Model):
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow(), nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
 class StockBalance(db.Model):
@@ -461,7 +461,7 @@ class AuditLog(db.Model):
     qty: Mapped[Numeric | None] = mapped_column(Numeric(14, 3), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow(), nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
 class ReorderPoint(db.Model):
