@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from flask import Flask, jsonify
+from pathlib import Path
+
+from flask import Flask, jsonify, send_from_directory
 
 from .config import Config
 from .extensions import cors, db, migrate
+
+# 前端打包產物（frontend/dist）；存在時由 Flask 一併託管，形成單一服務的部署方式
+FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 
 def create_app(config_object: type[Config] = Config) -> Flask:
@@ -64,4 +69,25 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     # 讓 `flask db` 等命令可以直接使用模型
     from . import models  # noqa: F401
 
+    _register_frontend(app)
     return app
+
+
+def _register_frontend(app: Flask) -> None:
+    """若已有前端打包產物，由 Flask 託管（SPA：未知路徑一律回 index.html）。"""
+    if not FRONTEND_DIST.exists() or not (FRONTEND_DIST / "index.html").exists():
+        app.logger.info("找不到 frontend/dist，略過前端託管（開發時請另開 Vite）")
+        return
+
+    @app.get("/")
+    def spa_index():
+        return send_from_directory(FRONTEND_DIST, "index.html")
+
+    @app.get("/<path:path>")
+    def spa_fallback(path: str):
+        if path.startswith("api/"):
+            return jsonify({"error": "找不到資源"}), 404
+        target = FRONTEND_DIST / path
+        if target.is_file():
+            return send_from_directory(FRONTEND_DIST, path)
+        return send_from_directory(FRONTEND_DIST, "index.html")
