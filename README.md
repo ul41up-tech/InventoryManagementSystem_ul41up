@@ -73,10 +73,26 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 ### 2. 建立資料庫與角色（需 postgres 超級使用者權限）
 
+**方式 A（建議）：用密碼檔讓腳本代勞**
+
+把 PostgreSQL `postgres` 超級使用者密碼貼到 `backend/db_password.txt` 最後一行（取代「在此貼上密碼」），然後執行：
+
+```powershell
+backend\.venv\Scripts\python.exe backend\tools\setup_database.py
+```
+
+腳本會直接讀檔建立角色 `ailearn_app`、資料庫 `AILearn`、寫入 `backend/.env`（隨機密鑰），
+再執行 `flask db upgrade` 與 `flask seed`。**密碼全程不經對話、不進版控**（`db_password.txt` 已被 `.gitignore` 排除）。
+完成後可把該檔內容清空——superuser 密碼之後不再需要。
+
+**方式 B：自己下指令**
+
 ```powershell
 psql -U postgres -c "CREATE ROLE ailearn_app LOGIN PASSWORD '你的密碼';"
 psql -U postgres -c "CREATE DATABASE AILearn OWNER ailearn_app ENCODING 'UTF8';"
 ```
+
+接著手動把連線字串寫進 `backend/.env`。
 
 ### 3. 建立資料表並寫入種子資料
 
@@ -169,6 +185,15 @@ cd backend
 ```powershell
 .venv/Scripts/python.exe -m ruff check app tests
 ```
+
+### 對真實 PostgreSQL 做端對端驗證
+
+```powershell
+backend\.venv\Scripts\python.exe backend\tools\verify_live.py
+```
+
+會啟動後端、以真實 HTTP 呼叫驗證登入／鎖定／權限矩陣／庫存數字／稽核紀錄／改密／登出，
+再自動關閉後端。密碼取自 `backend/.env`，不會顯示。
 
 ## 常見問題
 

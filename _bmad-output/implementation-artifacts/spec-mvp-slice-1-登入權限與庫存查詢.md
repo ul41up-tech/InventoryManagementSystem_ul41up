@@ -114,15 +114,21 @@ review_loop_iteration: 0
 - [x] T-10 文件：README（設定、migration、seed、API 一覽、環境變數、常見問題、資安原則）、`.env.example`、`.gitignore`、`.gitattributes`、`pyproject.toml`（pytest/ruff 設定）
 - [x] T-12 初始 migration 產出：`backend/migrations/versions/0001_initial_schema.py`（由 `tools/generate_initial_migration.py` 產生，不需 DB 連線）
 - [x] T-13 審查修補（見 Review Triage Log）：時間戳預設值、可用量以 ledger 為準、權限矩陣落地、輸入驗證、稽核讀取端點、改密流程、種子冪等
-- [ ] T-11 在真實 PostgreSQL 上執行 `flask db upgrade` 與 `flask seed`（**待 PostgreSQL 密碼**；目前以 SQLite 記憶體庫驗證）
+- [x] T-14 帳號與角色管理 API（FR-26）：`/api/users` 建立／停用／改角色／重設密碼／解除鎖定（僅管理員），補齊 spec 宣稱但先前未實作的範圍
+- [x] T-15 真實 PostgreSQL 環境：`tools/setup_database.py` 建立角色／資料庫／`.env` 並套用 migration 與 seed；`tools/verify_live.py` 端對端驗證 36 項檢查全數通過
 
 ## Verification
 
 ```powershell
 cd backend
-.venv/Scripts/python.exe -m pytest tests -q     # 43 passed
-cd ..\frontend; npm run build                     # built successfully
+.venv/Scripts/python.exe -m pytest tests -q                       # 49 passed（SQLite 記憶體庫）
+cd ..\frontend; npm run build                                      # built successfully
+backend\.venv\Scripts\python.exe backend\tools\verify_live.py      # 36 項全數通過（真實 PostgreSQL）
 ```
+
+真實 PostgreSQL 驗證涵蓋：登入與密碼錯誤、連續失敗鎖定、帳號管理、未登入 401、庫存數字
+（在手量 350／在途 15／可用量 350／ledger 與快取零差額）、PRD §4.1 權限矩陣逐格、
+採購看不到客戶身分、改密與登出、稽核紀錄七種事件。
 
 ## Spec Change Log
 
